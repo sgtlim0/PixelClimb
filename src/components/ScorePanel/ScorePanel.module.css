@@ -29,6 +29,39 @@
   white-space: nowrap;
 }
 
+.shield {
+  font-size: 0.85rem;
+  animation: pulse 1s ease infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
+.doubleScore {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--gold);
+  background: rgba(251, 191, 36, 0.15);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 4px;
+  padding: 1px 4px;
+  animation: pulse 1s ease infinite;
+  white-space: nowrap;
+}
+
+.streak {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--green);
+  background: rgba(52, 211, 153, 0.15);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  border-radius: 4px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+
 .center {
   display: flex;
   align-items: center;
@@ -62,6 +95,13 @@
   font-size: 0.65rem;
   font-weight: 600;
   color: var(--text-muted);
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.levelValue {
+  font-size: 0.75rem;
+  font-weight: 800;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
 }

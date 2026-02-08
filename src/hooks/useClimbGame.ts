@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from 'react'
 import {
   GAME_CONFIG,
+  LEVEL_ZONES,
   BEST_SCORE_KEY,
   LEADERBOARD_KEY,
   MAX_LEADERBOARD,
@@ -12,9 +13,18 @@ import type {
   Particle,
   PlayerState,
   LeaderboardEntry,
+  PowerUpType,
 } from '../types/index.ts'
-import { COLORS } from '../types/index.ts'
-import { playJump, playFail, playMilestone } from '../engine/sound.ts'
+import {
+  playJump,
+  playFail,
+  playMilestone,
+  playLevelUp,
+  playShield,
+  playShieldBreak,
+  playDoubleScore,
+  playStreak,
+} from '../engine/sound.ts'
 
 function loadBestScore(): number {
   try {
@@ -54,23 +64,45 @@ function randomDirection(): Direction {
   return Math.random() < 0.5 ? 'left' : 'right'
 }
 
+function getPowerUp(index: number): PowerUpType | null {
+  if (index < 5) return null
+  const { shieldInterval, doubleScoreInterval } = GAME_CONFIG
+  if (index % shieldInterval === 0) return 'shield'
+  if (index % doubleScoreInterval === 0) return 'doubleScore'
+  return null
+}
+
+function getStepWidthForLevel(level: number): number {
+  const { stepWidth, minStepWidth, stepWidthShrink } = GAME_CONFIG
+  return Math.max(minStepWidth, stepWidth - level * stepWidthShrink)
+}
+
+function getOffsetForLevel(level: number): number {
+  const { stepOffsetX, maxOffsetVariance } = GAME_CONFIG
+  const variance = Math.min(level * 3, maxOffsetVariance)
+  return stepOffsetX + (Math.random() - 0.5) * variance
+}
+
 function generateStep(index: number, prevStep: Step | null): Step {
-  const { stepOffsetX, stepGapY, baseY, width, stepWidth } = GAME_CONFIG
+  const { stepGapY, baseY, width } = GAME_CONFIG
 
   if (index === 0) {
-    return { x: width / 2, y: baseY, direction: 'right', index: 0 }
+    return { x: width / 2, y: baseY, direction: 'right', index: 0, powerUp: null }
   }
 
+  const level = Math.floor(index / GAME_CONFIG.levelInterval)
+  const stepW = getStepWidthForLevel(level)
   const dir = randomDirection()
   const prevX = prevStep!.x
-  const offsetX = dir === 'left' ? -stepOffsetX : stepOffsetX
+  const offset = getOffsetForLevel(level)
+  const offsetX = dir === 'left' ? -offset : offset
   const newX = Math.max(
-    stepWidth / 2 + 20,
-    Math.min(width - stepWidth / 2 - 20, prevX + offsetX),
+    stepW / 2 + 20,
+    Math.min(width - stepW / 2 - 20, prevX + offsetX),
   )
   const newY = prevStep!.y - stepGapY
 
-  return { x: newX, y: newY, direction: dir, index }
+  return { x: newX, y: newY, direction: dir, index, powerUp: getPowerUp(index) }
 }
 
 function generateInitialSteps(): Step[] {
@@ -81,7 +113,11 @@ function generateInitialSteps(): Step[] {
   return steps
 }
 
-function createParticles(x: number, y: number, count: number): Particle[] {
+function getZone(level: number) {
+  return LEVEL_ZONES[level % LEVEL_ZONES.length]
+}
+
+function createParticles(x: number, y: number, count: number, colors: readonly string[]): Particle[] {
   const particles: Particle[] = []
   for (let i = 0; i < count; i++) {
     const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5
@@ -93,7 +129,7 @@ function createParticles(x: number, y: number, count: number): Particle[] {
       vy: Math.sin(angle) * speed - 2,
       life: 1,
       maxLife: 1,
-      color: COLORS.particles[Math.floor(Math.random() * COLORS.particles.length)],
+      color: colors[Math.floor(Math.random() * colors.length)],
       size: 2 + Math.random() * 3,
     })
   }
@@ -106,6 +142,10 @@ export function useClimbGame() {
   const [bestScore, setBestScore] = useState(loadBestScore)
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>(() => loadLeaderboard())
   const [muted, setMuted] = useState(false)
+  const [level, setLevel] = useState(0)
+  const [hasShield, setHasShield] = useState(false)
+  const [doubleScoreLeft, setDoubleScoreLeft] = useState(0)
+  const [streak, setStreak] = useState(0)
 
   const stepsRef = useRef<Step[]>(generateInitialSteps())
   const playerRef = useRef<PlayerState>({
@@ -122,6 +162,11 @@ export function useClimbGame() {
   const phaseRef = useRef<GamePhase>('menu')
   const mutedRef = useRef(false)
   const failedStepRef = useRef<number | null>(null)
+  const levelRef = useRef(0)
+  const hasShieldRef = useRef(false)
+  const doubleScoreLeftRef = useRef(0)
+  const streakRef = useRef(0)
+  const shakeRef = useRef(0)
 
   const startGame = useCallback(() => {
     stepsRef.current = generateInitialSteps()
@@ -137,7 +182,16 @@ export function useClimbGame() {
     particlesRef.current = []
     scoreRef.current = 0
     failedStepRef.current = null
+    levelRef.current = 0
+    hasShieldRef.current = false
+    doubleScoreLeftRef.current = 0
+    streakRef.current = 0
+    shakeRef.current = 0
     setScore(0)
+    setLevel(0)
+    setHasShield(false)
+    setDoubleScoreLeft(0)
+    setStreak(0)
     setPhase('playing')
     phaseRef.current = 'playing'
   }, [])
@@ -152,9 +206,10 @@ export function useClimbGame() {
     if (nextIdx >= stepsRef.current.length) return
 
     const nextStep = stepsRef.current[nextIdx]
+    const currentStep = stepsRef.current[currentIdx]
     const isCorrect =
-      (direction === 'left' && nextStep.x < stepsRef.current[currentIdx].x) ||
-      (direction === 'right' && nextStep.x >= stepsRef.current[currentIdx].x)
+      (direction === 'left' && nextStep.x < currentStep.x) ||
+      (direction === 'right' && nextStep.x >= currentStep.x)
 
     if (isCorrect) {
       // Successful jump
@@ -166,21 +221,62 @@ export function useClimbGame() {
       }
       currentStepRef.current = nextIdx
 
-      const newScore = nextIdx
-      scoreRef.current = newScore
-      setScore(newScore)
+      // Scoring: base 1 point, doubled if doubleScore active
+      const multiplier = doubleScoreLeftRef.current > 0 ? 2 : 1
+      const earned = multiplier
+      scoreRef.current += earned
+      setScore(scoreRef.current)
 
+      if (doubleScoreLeftRef.current > 0) {
+        doubleScoreLeftRef.current -= 1
+        setDoubleScoreLeft(doubleScoreLeftRef.current)
+      }
+
+      // Streak
+      streakRef.current += 1
+      setStreak(streakRef.current)
+
+      // Level check
+      const newLevel = Math.floor(nextIdx / GAME_CONFIG.levelInterval)
+      if (newLevel > levelRef.current) {
+        levelRef.current = newLevel
+        setLevel(newLevel)
+        if (!mutedRef.current) playLevelUp()
+        // Level-up burst particles
+        const zone = getZone(newLevel)
+        particlesRef.current = [
+          ...particlesRef.current.slice(-10),
+          ...createParticles(nextStep.x, nextStep.y, 20, zone.particleColors),
+        ]
+      }
+
+      // Power-up pickup
+      if (nextStep.powerUp === 'shield') {
+        hasShieldRef.current = true
+        setHasShield(true)
+        if (!mutedRef.current) playShield()
+      } else if (nextStep.powerUp === 'doubleScore') {
+        doubleScoreLeftRef.current = GAME_CONFIG.doubleScoreDuration
+        setDoubleScoreLeft(GAME_CONFIG.doubleScoreDuration)
+        if (!mutedRef.current) playDoubleScore()
+      }
+
+      // Sound
       if (!mutedRef.current) {
-        playJump(newScore)
-        if (newScore > 0 && newScore % 25 === 0) {
+        playJump(nextIdx)
+        if (streakRef.current > 0 && streakRef.current % GAME_CONFIG.streakMilestone === 0) {
+          setTimeout(() => playStreak(streakRef.current), 80)
+        }
+        if (nextIdx > 0 && nextIdx % 25 === 0) {
           setTimeout(() => playMilestone(), 100)
         }
       }
 
       // Particles at landing
+      const zone = getZone(levelRef.current)
       particlesRef.current = [
         ...particlesRef.current.slice(-20),
-        ...createParticles(nextStep.x, nextStep.y, 8),
+        ...createParticles(nextStep.x, nextStep.y, 8, zone.particleColors),
       ]
 
       // Generate more steps ahead
@@ -202,14 +298,36 @@ export function useClimbGame() {
         }
       }, GAME_CONFIG.jumpDuration)
     } else {
-      // Failed jump - game over
-      failedStepRef.current = nextIdx
+      // Wrong direction
+      if (hasShieldRef.current) {
+        // Shield absorbs the mistake
+        hasShieldRef.current = false
+        setHasShield(false)
+        streakRef.current = 0
+        setStreak(0)
+        shakeRef.current = 8
+        if (!mutedRef.current) playShieldBreak()
 
-      // Show player jumping to wrong position then falling
+        // Visual feedback: shake + particles
+        const zone = getZone(levelRef.current)
+        particlesRef.current = [
+          ...particlesRef.current.slice(-10),
+          ...createParticles(currentStep.x, currentStep.y, 12, ['#3b82f6', '#60a5fa', '#93c5fd']),
+          ...createParticles(currentStep.x, currentStep.y, 6, zone.particleColors),
+        ]
+        return
+      }
+
+      // Game over
+      failedStepRef.current = nextIdx
+      streakRef.current = 0
+      setStreak(0)
+      shakeRef.current = 12
+
       const wrongX = direction === 'left'
-        ? stepsRef.current[currentIdx].x - GAME_CONFIG.stepOffsetX
-        : stepsRef.current[currentIdx].x + GAME_CONFIG.stepOffsetX
-      const wrongY = stepsRef.current[currentIdx].y - GAME_CONFIG.stepGapY
+        ? currentStep.x - GAME_CONFIG.stepOffsetX
+        : currentStep.x + GAME_CONFIG.stepOffsetX
+      const wrongY = currentStep.y - GAME_CONFIG.stepGapY
 
       playerRef.current = {
         ...playerRef.current,
@@ -260,12 +378,23 @@ export function useClimbGame() {
     cameraY: cameraYRef.current,
     particles: particlesRef.current,
     failedStep: failedStepRef.current,
+    level: levelRef.current,
+    hasShield: hasShieldRef.current,
+    doubleScoreLeft: doubleScoreLeftRef.current,
+    streak: streakRef.current,
+    shake: shakeRef.current,
   }), [])
 
   const updateCamera = useCallback(() => {
     const player = playerRef.current
     const targetCameraY = Math.max(0, (GAME_CONFIG.baseY - player.targetY) - 100)
     cameraYRef.current += (targetCameraY - cameraYRef.current) * GAME_CONFIG.cameraSmooth
+
+    // Decay screen shake
+    if (shakeRef.current > 0) {
+      shakeRef.current *= 0.85
+      if (shakeRef.current < 0.5) shakeRef.current = 0
+    }
   }, [])
 
   const updateParticles = useCallback(() => {
@@ -300,6 +429,10 @@ export function useClimbGame() {
     bestScore,
     leaderboard,
     muted,
+    level,
+    hasShield,
+    doubleScoreLeft,
+    streak,
     startGame,
     handleMove,
     toggleMute,

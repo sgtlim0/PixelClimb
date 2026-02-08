@@ -19,6 +19,10 @@ export default function App() {
     bestScore,
     leaderboard,
     muted,
+    level,
+    hasShield,
+    doubleScoreLeft,
+    streak,
     startGame,
     handleMove,
     toggleMute,
@@ -56,6 +60,10 @@ export default function App() {
       <ScorePanel
         score={score}
         bestScore={bestScore}
+        level={level}
+        hasShield={hasShield}
+        doubleScoreLeft={doubleScoreLeft}
+        streak={streak}
         muted={muted}
         onToggleMute={toggleMute}
       />

@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react'
-import { GAME_CONFIG, COLORS } from '../../types/index.ts'
+import { GAME_CONFIG, LEVEL_ZONES, COLORS } from '../../types/index.ts'
 import type { Direction, Step, Particle, PlayerState } from '../../types/index.ts'
 import type { ScaleInfo } from '../../hooks/useResponsiveScale.ts'
 import styles from './GameCanvas.module.css'
@@ -15,11 +15,28 @@ interface GameCanvasProps {
     cameraY: number
     particles: Particle[]
     failedStep: number | null
+    level: number
+    hasShield: boolean
+    doubleScoreLeft: number
+    streak: number
+    shake: number
   }
   readonly updateCamera: () => void
   readonly updateParticles: () => void
   readonly updatePlayer: () => void
   readonly onMove: (dir: Direction) => void
+}
+
+function getZone(level: number) {
+  return LEVEL_ZONES[level % LEVEL_ZONES.length]
+}
+
+function getStepWidth(stepIndex: number): number {
+  const level = Math.floor(stepIndex / GAME_CONFIG.levelInterval)
+  return Math.max(
+    GAME_CONFIG.minStepWidth,
+    GAME_CONFIG.stepWidth - level * GAME_CONFIG.stepWidthShrink,
+  )
 }
 
 export default function GameCanvas({
@@ -34,7 +51,8 @@ export default function GameCanvas({
 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const animRef = useRef(0)
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null)
+  const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null)
+  const isTouchRef = useRef(false)
 
   const propsRef = useRef({
     phase,
@@ -57,17 +75,20 @@ export default function GameCanvas({
   }, [phase, score, getGameState, updateCamera, updateParticles, updatePlayer])
 
   const drawStep = useCallback(
-    (ctx: CanvasRenderingContext2D, step: Step, cameraY: number, currentStep: number, failedStep: number | null) => {
-      const { stepWidth, stepHeight } = GAME_CONFIG
+    (ctx: CanvasRenderingContext2D, step: Step, cameraY: number, currentStep: number, failedStep: number | null, level: number) => {
+      const stepW = getStepWidth(step.index)
+      const { stepHeight } = GAME_CONFIG
       const screenY = step.y - cameraY
       const isActive = step.index === currentStep
       const isFailed = step.index === failedStep
       const isPast = step.index < currentStep
+      const isNext = step.index === currentStep + 1
 
       if (screenY < -50 || screenY > GAME_CONFIG.height + 50) return
 
-      const x = step.x - stepWidth / 2
+      const x = step.x - stepW / 2
       const y = screenY - stepHeight / 2
+      const zone = getZone(level)
 
       ctx.save()
 
@@ -76,23 +97,27 @@ export default function GameCanvas({
         ctx.shadowBlur = 15
         ctx.fillStyle = COLORS.stepMissed
       } else if (isActive) {
-        ctx.shadowColor = COLORS.stepGlow
-        ctx.shadowBlur = 12
-        ctx.fillStyle = COLORS.stepNormal
+        ctx.shadowColor = zone.stepGlow
+        ctx.shadowBlur = 14
+        ctx.fillStyle = zone.stepColor
       } else if (isPast) {
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.2)'
+        ctx.fillStyle = `${zone.stepColor}33`
+      } else if (isNext) {
+        ctx.shadowColor = zone.stepGlow
+        ctx.shadowBlur = 8
+        ctx.fillStyle = `${zone.stepColor}cc`
       } else {
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.6)'
+        ctx.fillStyle = `${zone.stepColor}99`
       }
 
-      // Draw rounded step
+      // Rounded step
       const radius = 6
       ctx.beginPath()
       ctx.moveTo(x + radius, y)
-      ctx.lineTo(x + stepWidth - radius, y)
-      ctx.quadraticCurveTo(x + stepWidth, y, x + stepWidth, y + radius)
-      ctx.lineTo(x + stepWidth, y + stepHeight - radius)
-      ctx.quadraticCurveTo(x + stepWidth, y + stepHeight, x + stepWidth - radius, y + stepHeight)
+      ctx.lineTo(x + stepW - radius, y)
+      ctx.quadraticCurveTo(x + stepW, y, x + stepW, y + radius)
+      ctx.lineTo(x + stepW, y + stepHeight - radius)
+      ctx.quadraticCurveTo(x + stepW, y + stepHeight, x + stepW - radius, y + stepHeight)
       ctx.lineTo(x + radius, y + stepHeight)
       ctx.quadraticCurveTo(x, y + stepHeight, x, y + stepHeight - radius)
       ctx.lineTo(x, y + radius)
@@ -101,18 +126,33 @@ export default function GameCanvas({
       ctx.fill()
 
       // Step highlight
-      if (isActive || (!isPast && !isFailed)) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)'
+      if (isActive || isNext || (!isPast && !isFailed)) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.12)'
         ctx.beginPath()
         ctx.moveTo(x + radius, y)
-        ctx.lineTo(x + stepWidth - radius, y)
-        ctx.quadraticCurveTo(x + stepWidth, y, x + stepWidth, y + radius)
-        ctx.lineTo(x + stepWidth, y + stepHeight / 2)
+        ctx.lineTo(x + stepW - radius, y)
+        ctx.quadraticCurveTo(x + stepW, y, x + stepW, y + radius)
+        ctx.lineTo(x + stepW, y + stepHeight / 2)
         ctx.lineTo(x, y + stepHeight / 2)
         ctx.lineTo(x, y + radius)
         ctx.quadraticCurveTo(x, y, x + radius, y)
         ctx.closePath()
         ctx.fill()
+      }
+
+      // Power-up icon on step
+      if (step.powerUp && !isPast) {
+        ctx.shadowBlur = 0
+        ctx.font = 'bold 14px -apple-system, sans-serif'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        if (step.powerUp === 'shield') {
+          ctx.fillStyle = COLORS.shield
+          ctx.fillText('\uD83D\uDEE1\uFE0F', step.x, screenY - 18)
+        } else if (step.powerUp === 'doubleScore') {
+          ctx.fillStyle = COLORS.doubleScore
+          ctx.fillText('x2', step.x, screenY - 18)
+        }
       }
 
       ctx.restore()
@@ -121,11 +161,23 @@ export default function GameCanvas({
   )
 
   const drawPlayer = useCallback(
-    (ctx: CanvasRenderingContext2D, player: PlayerState, cameraY: number) => {
+    (ctx: CanvasRenderingContext2D, player: PlayerState, cameraY: number, hasShield: boolean) => {
       const { playerSize } = GAME_CONFIG
       const screenY = player.y - cameraY
 
       ctx.save()
+
+      // Shield aura
+      if (hasShield) {
+        ctx.shadowColor = COLORS.playerShield
+        ctx.shadowBlur = 25
+        ctx.strokeStyle = `${COLORS.playerShield}66`
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.arc(player.x, screenY - playerSize / 2 - 3, playerSize / 2 + 8, 0, Math.PI * 2)
+        ctx.stroke()
+        ctx.shadowBlur = 0
+      }
 
       // Player glow
       ctx.shadowColor = COLORS.playerGlow
@@ -191,18 +243,18 @@ export default function GameCanvas({
   )
 
   const drawBackground = useCallback(
-    (ctx: CanvasRenderingContext2D, cameraY: number) => {
+    (ctx: CanvasRenderingContext2D, cameraY: number, level: number) => {
       const { width, height } = GAME_CONFIG
+      const zone = getZone(level)
 
-      // Dark gradient background
       const grad = ctx.createLinearGradient(0, 0, 0, height)
-      grad.addColorStop(0, '#060e1a')
-      grad.addColorStop(1, '#0a1628')
+      grad.addColorStop(0, zone.bgTop)
+      grad.addColorStop(1, zone.bgBottom)
       ctx.fillStyle = grad
       ctx.fillRect(0, 0, width, height)
 
-      // Subtle grid
-      ctx.strokeStyle = 'rgba(59, 130, 246, 0.04)'
+      // Subtle grid with zone color
+      ctx.strokeStyle = `${zone.stepColor}0a`
       ctx.lineWidth = 1
       const gridSize = 40
       const offsetY = cameraY % gridSize
@@ -220,8 +272,8 @@ export default function GameCanvas({
         ctx.stroke()
       }
 
-      // Stars / dots
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.08)'
+      // Stars
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.06)'
       const starSeed = Math.floor(cameraY / 200)
       for (let i = 0; i < 30; i++) {
         const hash = ((starSeed + i) * 2654435761) >>> 0
@@ -230,6 +282,53 @@ export default function GameCanvas({
         ctx.beginPath()
         ctx.arc(sx, sy, 1, 0, Math.PI * 2)
         ctx.fill()
+      }
+    },
+    [],
+  )
+
+  const drawHUD = useCallback(
+    (ctx: CanvasRenderingContext2D, scoreVal: number, streak: number, doubleScoreLeft: number, level: number) => {
+      const { width } = GAME_CONFIG
+      const zone = getZone(level)
+
+      // Big score watermark
+      ctx.save()
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.12)'
+      ctx.font = 'bold 80px -apple-system, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(String(scoreVal), width / 2, 120)
+      ctx.restore()
+
+      // Level zone name
+      if (level > 0) {
+        ctx.save()
+        ctx.fillStyle = `${zone.stepColor}55`
+        ctx.font = 'bold 14px -apple-system, sans-serif'
+        ctx.textAlign = 'center'
+        ctx.fillText(`Lv.${level + 1} ${zone.name}`, width / 2, 170)
+        ctx.restore()
+      }
+
+      // Streak indicator
+      if (streak >= 5) {
+        ctx.save()
+        ctx.fillStyle = `${COLORS.doubleScore}aa`
+        ctx.font = 'bold 16px -apple-system, sans-serif'
+        ctx.textAlign = 'right'
+        ctx.fillText(`${streak} streak`, width - 15, 30)
+        ctx.restore()
+      }
+
+      // Double score indicator
+      if (doubleScoreLeft > 0) {
+        ctx.save()
+        ctx.fillStyle = `${COLORS.doubleScore}cc`
+        ctx.font = 'bold 14px -apple-system, sans-serif'
+        ctx.textAlign = 'left'
+        ctx.fillText(`x2 (${doubleScoreLeft})`, 15, 30)
+        ctx.restore()
       }
     },
     [],
@@ -256,15 +355,23 @@ export default function GameCanvas({
       props.updatePlayer()
 
       const state = props.getGameState()
-      const { cameraY } = state
+      const { cameraY, shake } = state
 
       ctx!.clearRect(0, 0, width, height)
 
-      drawBackground(ctx!, cameraY)
+      // Screen shake offset
+      ctx!.save()
+      if (shake > 0) {
+        const sx = (Math.random() - 0.5) * shake
+        const sy = (Math.random() - 0.5) * shake
+        ctx!.translate(sx, sy)
+      }
+
+      drawBackground(ctx!, cameraY, state.level)
 
       // Draw steps
       for (const step of state.steps) {
-        drawStep(ctx!, step, cameraY, state.currentStep, state.failedStep)
+        drawStep(ctx!, step, cameraY, state.currentStep, state.failedStep, state.level)
       }
 
       // Draw particles
@@ -272,19 +379,15 @@ export default function GameCanvas({
 
       // Draw player
       if (props.phase !== 'menu') {
-        drawPlayer(ctx!, state.player, cameraY)
+        drawPlayer(ctx!, state.player, cameraY, state.hasShield)
       }
 
-      // Score display during playing
+      // HUD during playing
       if (props.phase === 'playing') {
-        ctx!.save()
-        ctx!.fillStyle = 'rgba(255, 255, 255, 0.15)'
-        ctx!.font = 'bold 80px -apple-system, sans-serif'
-        ctx!.textAlign = 'center'
-        ctx!.textBaseline = 'middle'
-        ctx!.fillText(String(props.score), width / 2, 120)
-        ctx!.restore()
+        drawHUD(ctx!, props.score, state.streak, state.doubleScoreLeft, state.level)
       }
+
+      ctx!.restore()
 
       animRef.current = requestAnimationFrame(render)
     }
@@ -294,12 +397,13 @@ export default function GameCanvas({
     return () => {
       cancelAnimationFrame(animRef.current)
     }
-  }, [drawBackground, drawStep, drawParticles, drawPlayer])
+  }, [drawBackground, drawStep, drawParticles, drawPlayer, drawHUD])
 
-  // Touch/swipe handlers
+  // Touch/swipe handlers - prevents double-fire with click
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    isTouchRef.current = true
     const touch = e.touches[0]
-    touchStartRef.current = { x: touch.clientX, y: touch.clientY }
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() }
   }, [])
 
   const handleTouchEnd = useCallback(
@@ -307,19 +411,29 @@ export default function GameCanvas({
       if (!touchStartRef.current) return
       const touch = e.changedTouches[0]
       const dx = touch.clientX - touchStartRef.current.x
-      const minSwipe = 20
+      const dt = Date.now() - touchStartRef.current.time
 
-      if (Math.abs(dx) > minSwipe) {
+      // Swipe detection: min 15px drag or tap (< 200ms, < 10px move)
+      if (Math.abs(dx) > 15) {
         onMove(dx < 0 ? 'left' : 'right')
+      } else if (dt < 200) {
+        // Tap: use position on canvas
+        const rect = (e.target as HTMLElement).getBoundingClientRect()
+        const tapX = touch.clientX - rect.left
+        onMove(tapX < rect.width / 2 ? 'left' : 'right')
       }
       touchStartRef.current = null
     },
     [onMove],
   )
 
-  // Click handler (left/right half)
+  // Click handler - only fires for mouse, not touch
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
+      if (isTouchRef.current) {
+        isTouchRef.current = false
+        return
+      }
       const rect = (e.target as HTMLElement).getBoundingClientRect()
       const x = e.clientX - rect.left
       const half = rect.width / 2
