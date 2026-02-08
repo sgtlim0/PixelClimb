@@ -1,0 +1,12 @@
+.canvas {
+  display: block;
+  touch-action: none;
+  border-radius: 0;
+}
+
+@media (min-width: 480px) {
+  .canvas {
+    border-radius: 12px;
+    box-shadow: 0 0 40px rgba(59, 130, 246, 0.1);
+  }
+}
